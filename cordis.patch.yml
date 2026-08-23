@@ -1,0 +1,12 @@
+# Canon is an additional surface beside the normal DeepSeek Harness Web UI.
+# The bundle deliberately inserts only its own row: it does not replace the
+# webserver, Web runtime, user-questions, approval, or tool rows.
+- insert:
+    - id: canon-dsh
+      name: '@canonmsg/deepseek-harness-plugin'
+      config:
+        canonProfile: !!js process.env.CANON_AGENT ?? ''
+        workspaceRoot: !!js process.env.CANON_DSH_WORKSPACE ?? process.cwd()
+        provider: !!js process.env.DSH_PROVIDER
+        model: !!js process.env.DSH_MODEL
+      disabled: !!js process.env.CANON_DSH_DISABLED === '1'
