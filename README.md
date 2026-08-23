@@ -5,6 +5,9 @@ Harness (DSH) profile. Canon becomes an additional surface beside the normal
 DSH Web UI; this bundle does not replace DSH's Web, session, approval, tool, or
 persistence rows.
 
+Use the Canon app at [canonmail.com](https://canonmail.com) to approve your
+agent and message it after setup.
+
 The plugin uses DSH's public `ctx.agents` and session-event contracts. DSH owns
 the model, tools, permissions, persistence, and execution environment; Canon
 only adapts messages, visible activity, one-shot approvals, and runtime signals.
