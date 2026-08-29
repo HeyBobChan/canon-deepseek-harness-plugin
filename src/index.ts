@@ -5,6 +5,8 @@ import {
   verifyResolvedAgentEnvironment,
 } from '@canonmsg/core';
 import type { Context } from '@deepseek-ai/cordis';
+import type { PlanModeController } from '@deepseek-ai/dsh-plan-mode';
+import type {} from '@deepseek-ai/dsh-user-questions';
 
 import { DeepSeekHarnessBridge, createRuntimeSignalHandlers } from './bridge.js';
 import { Config, normalizePluginConfig, type PluginConfig } from './config.js';
@@ -25,6 +27,15 @@ export type { PluginConfig };
 
 export async function apply(ctx: Context, rawConfig: PluginConfig): Promise<void> {
   const config = normalizePluginConfig(rawConfig);
+  let planMode: Pick<PlanModeController, 'set'> | undefined;
+  if (config.planMode) {
+    await ctx.inject(['planMode'], (planContext) => {
+      planMode = planContext.planMode;
+      return () => {
+        planMode = undefined;
+      };
+    });
+  }
   const profile = config.canonProfile
     ? resolveCanonProfile(config.canonProfile, {
       logPrefix: 'canon-dsh',
@@ -52,7 +63,10 @@ export async function apply(ctx: Context, rawConfig: PluginConfig): Promise<void
       deliveryMode: 'sse',
       debounceMs: 500,
       clientType: 'deepseek-harness',
-      runtimeDescriptor: createDeepSeekHarnessRuntimeDescriptor(config.workspaceRoot),
+      runtimeDescriptor: createDeepSeekHarnessRuntimeDescriptor(
+        config.workspaceRoot,
+        config.planMode === true,
+      ),
       runtimeControls,
       sessions: {
         enabled: true,
@@ -66,8 +80,20 @@ export async function apply(ctx: Context, rawConfig: PluginConfig): Promise<void
       config,
       profile,
       canonAgent,
+      getPlanMode: () => planMode,
     });
     const log = ctx.logger(name);
+
+    if (config.questionProvider === 'canon') {
+      await ctx.inject(['userQuestions'], (questionContext) => {
+        questionContext.userQuestions.registerProvider({
+          ask: (request) => {
+            if (!bridge) throw new Error('canon-dsh: bridge is unavailable');
+            return bridge.answerUserQuestions(request);
+          },
+        });
+      });
+    }
 
     // CanonAgent.start() owns the long-lived SSE read loop. Register teardown
     // first, then launch that loop without holding the Cordis fiber in LOADING.

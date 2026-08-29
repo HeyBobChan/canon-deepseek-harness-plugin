@@ -12,6 +12,10 @@ export interface PluginConfig {
   provider?: string;
   /** Optional model override supplied by the DSH profile. */
   model?: string;
+  /** Which DSH surface owns human questions in this Cordis context. */
+  questionProvider?: 'external' | 'canon';
+  /** Advertise Canon plan mode and bind it to a composed DSH planMode service. */
+  planMode?: boolean;
 }
 
 export const DSH_PLUGIN_CONFIG_KEYS = [
@@ -19,6 +23,8 @@ export const DSH_PLUGIN_CONFIG_KEYS = [
   'workspaceRoot',
   'provider',
   'model',
+  'questionProvider',
+  'planMode',
 ] as const satisfies ReadonlyArray<keyof PluginConfig>;
 
 const configShape = Schema.object({
@@ -26,6 +32,11 @@ const configShape = Schema.object({
   workspaceRoot: Schema.string().default(process.cwd()),
   provider: Schema.string(),
   model: Schema.string(),
+  questionProvider: Schema.union([
+    Schema.const('external'),
+    Schema.const('canon'),
+  ]).default('external'),
+  planMode: Schema.boolean().default(false),
 });
 
 // The third argument puts Schemastery's Standard Schema resolver in strict
@@ -45,6 +56,8 @@ export function normalizePluginConfig(value: PluginConfig): PluginConfig {
     workspaceRoot: resolveWorkspaceRoot(value.workspaceRoot),
     ...(provider ? { provider } : {}),
     ...(model ? { model } : {}),
+    questionProvider: value.questionProvider ?? 'external',
+    planMode: value.planMode === true,
   };
 }
 

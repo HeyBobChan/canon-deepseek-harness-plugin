@@ -28,17 +28,22 @@ describe('Canon DSH package metadata', () => {
     expect(manifest.homepage).toBe('https://github.com/HeyBobChan/canon-deepseek-harness-plugin#readme');
     expect(manifest.files).toEqual(['dist', 'cordis.patch.yml', 'README.md', 'LICENSE']);
     expect(manifest.dependencies).toMatchObject({
-      '@canonmsg/agent-sdk': '^8.8.0',
-      '@canonmsg/core': '^10.6.0',
+      '@canonmsg/agent-sdk': '^9.1.0',
+      '@canonmsg/core': '^11.0.0',
     });
     expect(manifest.peerDependencies).toMatchObject({
       '@deepseek-ai/dsh-agent': '0.1.1-rc.2',
       '@deepseek-ai/dsh-llm': '0.1.1-rc.2',
+      '@deepseek-ai/dsh-plan-mode': '0.1.1-rc.2',
       '@deepseek-ai/dsh-session': '0.1.1-rc.2',
       '@deepseek-ai/dsh-session-persistence': '0.1.1-rc.2',
       '@deepseek-ai/dsh-user-approval': '0.1.1-rc.2',
+      '@deepseek-ai/dsh-user-questions': '0.1.1-rc.2',
     });
     expect(manifest.peerDependencies['@deepseek-ai/dsh-tools']).toBeUndefined();
+    expect(manifest.peerDependenciesMeta).toEqual({
+      '@deepseek-ai/dsh-plan-mode': { optional: true },
+    });
   });
 
   it('declares source entry points and a DSH-specific registration CLI', () => {

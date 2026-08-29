@@ -31,6 +31,7 @@ function createMessageContext(input: {
   id?: string;
   text?: string;
   controller?: AbortController;
+  requestedTurnMode?: string | null;
 } = {}) {
   const controller = input.controller ?? new AbortController();
   const id = input.id ?? 'message-1';
@@ -55,6 +56,7 @@ function createMessageContext(input: {
       createdAt: '2026-08-23T00:00:00.000Z',
     }],
     conversationId: 'conversation-1',
+    requestedTurnMode: input.requestedTurnMode ?? null,
     conversation: { type: 'direct' as const, memberIds: ['owner-1', 'agent-dsh'] },
     turnContext: {
       schema: 'canon.turn.v2' as const,
@@ -73,6 +75,8 @@ function createMessageContext(input: {
     },
     agent: { agentId: 'agent-dsh' },
     turn: { setThinking: vi.fn(async () => undefined) },
+    requestRuntimeInput: vi.fn(),
+    requestPlanReview: vi.fn(),
     replyFinal: vi.fn(async () => ({ messageId: 'final', messageIds: ['final'] })),
   };
 }
@@ -82,7 +86,11 @@ afterEach(async () => {
   temporaryDirectories.length = 0;
 });
 
-async function createBridge(directoryOverride?: string, profileName = 'my-dsh') {
+async function createBridge(
+  directoryOverride?: string,
+  profileName = 'my-dsh',
+  planMode?: { set: ReturnType<typeof vi.fn> },
+) {
   const directory = directoryOverride ?? await mkdtemp(join(tmpdir(), 'canon-dsh-bridge-'));
   if (directoryOverride === undefined) temporaryDirectories.push(directory);
   const listeners = new Map<string, unknown>();
@@ -117,15 +125,150 @@ async function createBridge(directoryOverride?: string, profileName = 'my-dsh') 
   } as unknown as ResolvedAgent;
   const bridge = new DeepSeekHarnessBridge({
     context,
-    config: { canonProfile: profileName, workspaceRoot: directory },
+    config: {
+      canonProfile: profileName,
+      workspaceRoot: directory,
+      ...(planMode ? { planMode: true } : {}),
+    },
     profile,
     canonAgent,
+    ...(planMode ? { getPlanMode: () => planMode } : {}),
     stateRoot: join(directory, '.test-canon-home'),
   });
   return { bridge, context, canonAgent, listeners, release, directory, publishRuntimeActivity };
 }
 
 describe('DeepSeek Harness bridge lifecycle', () => {
+  it('answers DSH questions through Canon structured input cards', async () => {
+    const { bridge } = await createBridge();
+    const canonContext = createMessageContext();
+    canonContext.requestRuntimeInput.mockResolvedValueOnce({
+      status: 'submitted',
+      inputId: 'input-1',
+      answers: {
+        color: { answers: ['dsh-option-1-1', 'Muted accents'] },
+      },
+    });
+    const internals = bridge as unknown as {
+      conversationsBySessionId: Map<string, string>;
+      activeTurns: Map<string, unknown>;
+    };
+    internals.conversationsBySessionId.set('session-1', 'conversation-1');
+    internals.activeTurns.set('conversation-1', {
+      conversationId: 'conversation-1',
+      canonContext,
+      projection: new TurnProjection(),
+      toolCallIds: new Set(),
+      toolNamesByCallId: new Map(),
+    });
+
+    const answer = await bridge.answerUserQuestions({
+      agent: { id: 'session-1' } as never,
+      questions: [{
+        id: 'color',
+        question: 'Pick colors',
+        options: [{ label: 'Blue' }, { label: 'Green' }],
+        multiSelect: true,
+      }],
+    });
+
+    expect(canonContext.requestRuntimeInput).toHaveBeenCalledWith(expect.objectContaining({
+      kind: 'clarify',
+      title: 'DeepSeek Harness needs input',
+      questions: [expect.objectContaining({
+        id: 'color',
+        allowOther: true,
+        choices: [
+          expect.objectContaining({ label: 'Blue', value: 'dsh-option-1-1' }),
+          expect.objectContaining({ label: 'Green', value: 'dsh-option-1-2' }),
+        ],
+      })],
+    }));
+    expect(answer).toEqual({
+      answers: [{ id: 'color', selected: ['Blue'], custom: 'Muted accents' }],
+    });
+  });
+
+  it('renders DSH plan review through Canon native plan cards', async () => {
+    const { bridge } = await createBridge();
+    const canonContext = createMessageContext();
+    canonContext.requestPlanReview.mockResolvedValueOnce({
+      status: 'revise',
+      planId: 'plan-1',
+      feedback: 'Include rollback.',
+    });
+    const internals = bridge as unknown as {
+      conversationsBySessionId: Map<string, string>;
+      activeTurns: Map<string, unknown>;
+    };
+    internals.conversationsBySessionId.set('session-1', 'conversation-1');
+    internals.activeTurns.set('conversation-1', {
+      conversationId: 'conversation-1',
+      canonContext,
+      projection: new TurnProjection(),
+      toolCallIds: new Set(),
+      toolNamesByCallId: new Map(),
+    });
+
+    const answer = await bridge.answerUserQuestions({
+      agent: { id: 'session-1' } as never,
+      questions: [{
+        id: 'plan-review',
+        header: 'Plan review',
+        question: 'Approve this plan?',
+        detail: '# Plan\n\n1. Change the adapter.',
+        options: [{ label: 'Approve' }, { label: 'Keep planning' }],
+        intent: { kind: 'plan-review', approve: 'Approve' },
+      }],
+    });
+
+    expect(canonContext.requestPlanReview).toHaveBeenCalledWith(expect.objectContaining({
+      title: 'Plan review',
+      summary: 'Approve this plan?',
+      body: '# Plan\n\n1. Change the adapter.',
+    }));
+    expect(answer).toEqual({
+      answers: [{ id: 'plan-review', selected: [], custom: 'Include rollback.' }],
+    });
+  });
+
+  it('applies Canon next-turn plan mode and restores the default on the next message', async () => {
+    const planMode = { set: vi.fn() };
+    const { bridge, context } = await createBridge(undefined, 'my-dsh', planMode);
+    let sessionId = '';
+    let persisted = false;
+    const agent = {
+      id: '',
+      followup: vi.fn(),
+      cancel: vi.fn(),
+      whenIdle: vi.fn(async () => undefined),
+      session: { id: '' },
+    };
+    (context.agents as Mutable<Context['agents']>).create = vi.fn(async (options: { sessionId: string }) => {
+      sessionId = options.sessionId;
+      agent.id = sessionId;
+      agent.session.id = sessionId;
+      return { agent, dispose: vi.fn(async () => undefined) };
+    });
+    (context.sessionPersistence as Mutable<Context['sessionPersistence']>).list = vi.fn(async () => (
+      persisted ? [{ id: sessionId }] : []
+    ));
+    (context.sessions as Mutable<Context['sessions']>).flush = vi.fn(async () => {
+      persisted = true;
+      return true;
+    });
+
+    await (bridge as unknown as {
+      handleCanonMessage: (input: unknown) => Promise<void>;
+    }).handleCanonMessage(createMessageContext({ requestedTurnMode: 'plan' }));
+    await (bridge as unknown as {
+      handleCanonMessage: (input: unknown) => Promise<void>;
+    }).handleCanonMessage(createMessageContext({ id: 'message-2' }));
+
+    expect(planMode.set).toHaveBeenNthCalledWith(1, agent, true);
+    expect(planMode.set).toHaveBeenNthCalledWith(2, agent, false);
+  });
+
   it('creates a session through the agent factory', async () => {
     const { bridge, context } = await createBridge();
     const cancel = vi.fn();

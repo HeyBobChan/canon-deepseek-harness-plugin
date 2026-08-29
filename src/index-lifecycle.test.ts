@@ -170,6 +170,51 @@ describe('Canon DSH plugin lifecycle', () => {
     expect(newSession).toHaveBeenCalledWith(context);
   });
 
+  it('registers Canon as the explicit DSH question provider and binds plan mode', async () => {
+    const workspaceRoot = await mkdtemp(join(tmpdir(), 'canon-dsh-questions-'));
+    temporaryDirectories.push(workspaceRoot);
+    core.resolveCanonProfile.mockReturnValueOnce({
+      apiKey: 'test-key',
+      profile: 'my-dsh',
+      environmentId: 'canon-dev-v1',
+      baseUrl: 'https://api.example',
+      streamUrl: 'https://stream.example',
+      rtdbUrl: 'https://rtdb.example',
+      firebaseApiKey: 'key',
+    });
+    core.verifyResolvedAgentEnvironment.mockResolvedValueOnce(undefined);
+    const setPlanMode = vi.fn();
+    const registerProvider = vi.fn();
+    const context = makeContext() as ReturnType<typeof makeContext> & {
+      inject: ReturnType<typeof vi.fn>;
+    };
+    context.inject = vi.fn(async (dependencies: string[], callback: (ctx: unknown) => void) => {
+      if (dependencies.includes('planMode')) {
+        callback({ ...context, planMode: { set: setPlanMode } });
+      } else if (dependencies.includes('userQuestions')) {
+        callback({ ...context, userQuestions: { registerProvider } });
+      }
+    });
+
+    await apply(context as never, {
+      canonProfile: 'my-dsh',
+      workspaceRoot,
+      questionProvider: 'canon',
+      planMode: true,
+    });
+
+    expect(registerProvider).toHaveBeenCalledWith({ ask: expect.any(Function) });
+    expect(agentSdk.constructedOptions[0]?.runtimeDescriptor).toMatchObject({
+      turnModes: [
+        expect.objectContaining({ id: 'normal' }),
+        expect.objectContaining({ id: 'plan' }),
+      ],
+    });
+    expect((bridgeCapture.instances[0] as {
+      deps?: { getPlanMode?: () => unknown };
+    }).deps?.getPlanMode?.()).toEqual({ set: setPlanMode });
+  });
+
   it('becomes active without awaiting the long-lived Canon SSE loop', async () => {
     const workspaceRoot = await mkdtemp(join(tmpdir(), 'canon-dsh-sse-'));
     temporaryDirectories.push(workspaceRoot);

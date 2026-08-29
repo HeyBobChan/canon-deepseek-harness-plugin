@@ -16,6 +16,8 @@ it('declares only the Canon DSH config fields used by the patch', () => {
     'workspaceRoot',
     'provider',
     'model',
+    'questionProvider',
+    'planMode',
   ]);
 });
 
@@ -33,6 +35,8 @@ it('normalizes an explicit workspace and paired model route', () => {
     workspaceRoot: packageRoot,
     provider: 'deepseek-official',
     model: 'deepseek-v4-flash',
+    questionProvider: 'canon',
+    planMode: true,
   });
 
   expect(config).toEqual({
@@ -40,12 +44,18 @@ it('normalizes an explicit workspace and paired model route', () => {
     workspaceRoot: packageRoot,
     provider: 'deepseek-official',
     model: 'deepseek-v4-flash',
+    questionProvider: 'canon',
+    planMode: true,
   });
 });
 
 it('allows profile auto-selection and rejects half a model route', () => {
   expect(normalizePluginConfig({ workspaceRoot: packageRoot }).canonProfile)
     .toBeUndefined();
+  expect(normalizePluginConfig({ workspaceRoot: packageRoot })).toMatchObject({
+    questionProvider: 'external',
+    planMode: false,
+  });
   expect(() => normalizePluginConfig({
     workspaceRoot: packageRoot,
     provider: 'deepseek-official',
@@ -62,5 +72,7 @@ it('uses a strict Schemastery schema', () => {
   expect(resolved).toEqual({
     canonProfile: 'my-dsh',
     workspaceRoot: packageRoot,
+    questionProvider: 'external',
+    planMode: false,
   });
 });
