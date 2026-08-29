@@ -25,7 +25,19 @@ const agentSdk = vi.hoisted(() => ({
     start: () => Promise<void>;
     stop: () => Promise<void>;
   }>,
+  startImplementation: null as null | (() => Promise<void>),
+  stopImplementation: null as null | (() => Promise<void>),
 }));
+
+function deferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
 
 const bridgeCapture = vi.hoisted(() => ({
   instances: [] as unknown[],
@@ -38,8 +50,8 @@ vi.mock('@canonmsg/agent-sdk', () => ({
       agentSdk.constructedOptions.push(options);
       const instance = {
         on: vi.fn(),
-        start: vi.fn(async () => undefined),
-        stop: vi.fn(async () => undefined),
+        start: vi.fn(() => agentSdk.startImplementation?.() ?? Promise.resolve()),
+        stop: vi.fn(() => agentSdk.stopImplementation?.() ?? Promise.resolve()),
         clearRuntimeActivity: vi.fn(async () => undefined),
       };
       agentSdk.instances.push(instance);
@@ -71,6 +83,8 @@ afterEach(async () => {
   vi.clearAllMocks();
   agentSdk.constructedOptions.length = 0;
   agentSdk.instances.length = 0;
+  agentSdk.startImplementation = null;
+  agentSdk.stopImplementation = null;
   bridgeCapture.instances.length = 0;
 });
 
@@ -78,7 +92,7 @@ function makeContext() {
   return {
     effect: vi.fn(() => () => undefined),
     on: vi.fn(() => () => undefined),
-    logger: vi.fn(() => ({ warn: vi.fn() })),
+    logger: vi.fn(() => ({ error: vi.fn(), warn: vi.fn() })),
     sessions: {},
     agents: {},
     sessionPersistence: {},
@@ -154,5 +168,74 @@ describe('Canon DSH plugin lifecycle', () => {
     expect(interrupt).toHaveBeenCalledWith(context);
     expect(stopAndDrop).toHaveBeenCalledWith(context);
     expect(newSession).toHaveBeenCalledWith(context);
+  });
+
+  it('becomes active without awaiting the long-lived Canon SSE loop', async () => {
+    const workspaceRoot = await mkdtemp(join(tmpdir(), 'canon-dsh-sse-'));
+    temporaryDirectories.push(workspaceRoot);
+    const stream = deferred<void>();
+    agentSdk.startImplementation = () => stream.promise;
+    agentSdk.stopImplementation = async () => stream.resolve();
+    core.resolveCanonProfile.mockReturnValueOnce({
+      apiKey: 'test-key',
+      profile: 'my-dsh',
+      environmentId: 'canon-dev-v1',
+      baseUrl: 'https://api.example',
+      streamUrl: 'https://stream.example',
+      rtdbUrl: 'https://rtdb.example',
+      firebaseApiKey: 'key',
+    });
+    core.verifyResolvedAgentEnvironment.mockResolvedValueOnce(undefined);
+    const effects: Array<() => Promise<void>> = [];
+    const context = {
+      ...makeContext(),
+      effect: vi.fn((effect: () => () => Promise<void>) => {
+        effects.push(effect());
+        return () => undefined;
+      }),
+    };
+
+    await expect(apply(context as never, {
+      canonProfile: 'my-dsh',
+      workspaceRoot,
+    })).resolves.toBeUndefined();
+
+    const agent = agentSdk.instances[0];
+    if (!agent) throw new Error('expected Canon agent instance');
+    expect(agent.start).toHaveBeenCalledTimes(1);
+    expect(effects).toHaveLength(1);
+
+    await effects[0]?.();
+
+    expect(agent.stop).toHaveBeenCalledTimes(1);
+  });
+
+  it('disposes bridge resources when Canon startup fails asynchronously', async () => {
+    const workspaceRoot = await mkdtemp(join(tmpdir(), 'canon-dsh-start-failure-'));
+    temporaryDirectories.push(workspaceRoot);
+    const stream = deferred<void>();
+    const release = vi.fn();
+    agentSdk.startImplementation = () => stream.promise;
+    core.resolveCanonProfile.mockReturnValueOnce({
+      apiKey: 'test-key',
+      profile: 'my-dsh',
+      environmentId: 'canon-dev-v1',
+      baseUrl: 'https://api.example',
+      streamUrl: 'https://stream.example',
+      rtdbUrl: 'https://rtdb.example',
+      firebaseApiKey: 'key',
+      lockHandle: { release },
+    });
+    core.verifyResolvedAgentEnvironment.mockResolvedValueOnce(undefined);
+    const context = makeContext();
+
+    await apply(context as never, { canonProfile: 'my-dsh', workspaceRoot });
+    stream.reject(new Error('authentication failed'));
+
+    const agent = agentSdk.instances[0];
+    if (!agent) throw new Error('expected Canon agent instance');
+    await vi.waitFor(() => expect(agent.stop).toHaveBeenCalledTimes(1));
+    expect(release).toHaveBeenCalledTimes(1);
+    expect(context.logger).toHaveBeenCalledWith('canon-dsh');
   });
 });
