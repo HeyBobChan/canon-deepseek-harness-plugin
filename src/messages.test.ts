@@ -1,10 +1,28 @@
-import { describe, expect, it } from 'vitest';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import type { AttachmentStore, ImageAttachmentRef } from '@deepseek-ai/dsh-attachment';
 import type { CanonMessage, CanonTurnContextV2 } from '@canonmsg/core';
 import type { MessageHandlerContext } from '@canonmsg/agent-sdk';
 
-import { createCanonUserMessage, formatCanonMessages } from './messages.js';
+import {
+  createCanonUserMessage,
+  formatCanonMessages,
+  importCanonImages,
+} from './messages.js';
 
 const AGENT_ID = 'agent-dsh';
+const temporaryDirectories: string[] = [];
+
+afterEach(async () => {
+  await Promise.allSettled(temporaryDirectories.map((path) => rm(path, {
+    recursive: true,
+    force: true,
+  })));
+  temporaryDirectories.length = 0;
+});
 
 function message(overrides: Partial<CanonMessage>): CanonMessage {
   return {
@@ -100,6 +118,114 @@ describe('Canon to DSH messages', () => {
     ]);
     expect(Object.isFrozen(userMessage)).toBe(true);
     expect(Object.isFrozen(userMessage.content[0])).toBe(true);
+  });
+
+  it('appends durable DSH image references without exposing source URLs', () => {
+    const image = {
+      attachmentId: 'sha256:abc' as ImageAttachmentRef['attachmentId'],
+      mediaType: 'image/png' as const,
+      bytes: 3,
+      width: 1,
+      height: 1,
+      name: 'diagram.png',
+    };
+    const userMessage = createCanonUserMessage(handlerContext([message({})]), [image]);
+
+    expect(userMessage.content).toEqual([
+      { type: 'text', text: expect.stringContaining('Please inspect the failing test.') },
+      { type: 'image', attachment: image },
+    ]);
+    expect(JSON.stringify(userMessage)).not.toContain('http');
+  });
+
+  it('materializes only accepted Canon images and commits one ordered DSH batch', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'canon-dsh-images-'));
+    temporaryDirectories.push(directory);
+    const imagePath = join(directory, 'diagram.png');
+    await writeFile(imagePath, Buffer.from([1, 2, 3]));
+
+    const latest = message({
+      contentType: 'image',
+      text: 'Inspect these.',
+      attachments: [
+        {
+          kind: 'audio',
+          fileName: 'note.mp3',
+          mimeType: 'audio/mpeg',
+          url: 'https://secret.example/note.mp3',
+        },
+        {
+          kind: 'image',
+          fileName: 'diagram.png',
+          mimeType: 'image/png',
+          url: 'https://secret.example/diagram.png',
+        },
+        {
+          kind: 'image',
+          fileName: 'vector.svg',
+          mimeType: 'image/svg+xml',
+          url: 'https://secret.example/vector.svg',
+        },
+      ],
+    });
+    const materialize = vi.fn(async (
+      attachment: CanonMessage['attachments'][number],
+      options: { index?: number; messageId: string; conversationId: string },
+    ) => ({
+      ...attachment,
+      index: options.index ?? 0,
+      path: imagePath,
+      sourceUrl: attachment.url,
+      conversationId: options.conversationId,
+      messageId: options.messageId,
+    }));
+    const context = {
+      ...handlerContext([latest]),
+      conversationId: 'conversation-1',
+      abortSignal: new AbortController().signal,
+    } as unknown as MessageHandlerContext;
+    const ref = {
+      attachmentId: 'sha256:def' as ImageAttachmentRef['attachmentId'],
+      mediaType: 'image/png' as const,
+      bytes: 3,
+      width: 1,
+      height: 1,
+      name: 'diagram.png',
+    };
+    const saveImages = vi.fn(async () => [ref]);
+    const store = {
+      imageLimits: {
+        maxImageBytes: 1024,
+        maxImagesPerMessage: 4,
+        maxMessageImageBytes: 2048,
+        maxImagePixels: 1_000_000,
+        maxImageDimension: 1000,
+        mediaTypes: ['image/png', 'image/jpeg', 'image/webp', 'image/gif'],
+      },
+      saveImages,
+    } as unknown as Pick<AttachmentStore, 'imageLimits' | 'saveImages'>;
+
+    await expect(importCanonImages(context, store, materialize)).resolves.toEqual({
+      refs: [ref],
+      skipped: 1,
+    });
+    expect(materialize).toHaveBeenCalledWith(
+      expect.objectContaining({ fileName: 'diagram.png' }),
+      expect.objectContaining({
+        agentId: AGENT_ID,
+        conversationId: 'conversation-1',
+        messageId: latest.id,
+        index: 1,
+        maxBytes: 1024,
+        signal: context.abortSignal,
+      }),
+    );
+    expect(saveImages).toHaveBeenCalledWith([{
+      data: Buffer.from([1, 2, 3]),
+      mediaType: 'image/png',
+      name: 'diagram.png',
+    }]);
+    expect(JSON.stringify(saveImages.mock.calls)).not.toContain('secret.example');
   });
 
   it('preserves owner status in a direct owner DM', () => {

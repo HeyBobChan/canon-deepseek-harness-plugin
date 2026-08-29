@@ -6,6 +6,7 @@ import {
   TurnProjection,
   activityForSessionEvent,
   mapCanonApprovalDecision,
+  safeDisplayText,
 } from './event-mapping.js';
 
 function assistant(text: string): AssistantMessage {
@@ -62,6 +63,14 @@ describe('DSH event mapping', () => {
     failed.finish({ kind: 'error', error: { message: 'provider secret', code: 'SECRET' } } as TurnEndReason);
     expect(failed.finalText()).not.toContain('provider secret');
 
+    const rateLimited = new TurnProjection();
+    rateLimited.finish({
+      kind: 'error',
+      error: { message: 'provider secret', code: 'RATE_LIMIT', status: 429 },
+    } as TurnEndReason);
+    expect(rateLimited.finalText()).toContain('rate-limited');
+    expect(rateLimited.finalText()).not.toContain('provider secret');
+
     const interruptedMarker = new TurnProjection();
     interruptedMarker.applyAssistantMessage(assistant('Prefix.'), true);
     interruptedMarker.finish({ kind: 'completed' } as TurnEndReason);
@@ -84,11 +93,59 @@ describe('DSH event mapping', () => {
     });
     expect(JSON.stringify(started)).not.toContain('do-not-leak');
 
+    const completed = activityForSessionEvent(event('tool/result', {
+      turn: 1,
+      step: 2,
+      message: {
+        id: 'result-1',
+        role: 'user',
+        source: { kind: 'tool' },
+        content: [{
+          type: 'tool-result',
+          id: 'result-block-1',
+          toolCallId: 'call-1',
+          content: [{ type: 'text', text: 'done' }],
+        }],
+      },
+    }), 'conversation-1', 124, {
+      activeTurn: 1,
+      toolNamesByCallId: new Map([['call-1', 'bash']]),
+    });
+    expect(completed).toMatchObject({
+      id: 'dsh-tool:call-1',
+      title: 'bash',
+      status: 'completed',
+      endedAt: 124,
+    });
+    expect(completed?.title).not.toContain('call-1');
+
     const ended = activityForSessionEvent(event('turn/end', {
       turn: 1,
       reason: { kind: 'completed' },
-    }), 'conversation-1', 124);
-    expect(ended).toMatchObject({ status: 'completed', endedAt: 124 });
+    }), 'conversation-1', 125);
+    expect(ended).toMatchObject({ status: 'completed', endedAt: 125 });
+  });
+
+  it('projects todo snapshots as compact plan progress', () => {
+    const activity = activityForSessionEvent(event('todo/write', {
+      todos: [
+        { content: 'secret first task', status: 'completed' },
+        { content: 'secret current task', status: 'in_progress' },
+      ],
+    }), 'conversation-1', 123, { activeTurn: 4 });
+
+    expect(activity).toMatchObject({
+      id: 'dsh-plan:conversation-1',
+      runId: 'dsh:conversation-1:4',
+      kind: 'plan',
+      status: 'running',
+      progressText: '1/2 tasks completed',
+    });
+    expect(JSON.stringify(activity)).not.toContain('secret');
+  });
+
+  it('truncates display text at grapheme boundaries', () => {
+    expect(safeDisplayText('👨‍👩‍👧‍👦abcd', 'fallback', 4)).toBe('👨‍👩‍👧‍👦...');
   });
 
   it('preserves one-shot and human denial approval semantics', () => {

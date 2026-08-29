@@ -14,6 +14,7 @@ export const name = 'canon-dsh';
 
 export const inject = [
   'agents',
+  'attachments',
   'sessions',
   'approval',
   'sessionPersistence',

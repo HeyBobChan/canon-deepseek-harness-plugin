@@ -600,6 +600,7 @@ describe('DeepSeek Harness bridge lifecycle', () => {
       submittedMessageId: 'canon-message',
       dshTurn: 2,
       toolCallIds: new Set<string>(),
+      toolNamesByCallId: new Map<string, string>(),
     };
     (bridge as unknown as { activeTurns: Map<string, unknown> }).activeTurns.set('conversation-1', active);
     (bridge as unknown as { conversationsBySessionId: Map<string, string> }).conversationsBySessionId.set(

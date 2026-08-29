@@ -1,6 +1,7 @@
 import type {
   AssistantMessage,
   ContentBlock,
+  LlmFailure,
   StreamChunk,
 } from '@deepseek-ai/dsh-llm';
 import type { SessionEvent, TurnEndReason } from '@deepseek-ai/dsh-session';
@@ -14,12 +15,18 @@ export interface StreamingTurnController {
 
 export type BridgeTurnStatus = 'running' | 'completed' | 'failed' | 'aborted' | 'blocked';
 
+export interface SessionActivityOptions {
+  activeTurn?: number;
+  toolNamesByCallId?: ReadonlyMap<string, string>;
+}
+
 export class TurnProjection {
   private readonly output: string[] = [];
   private readonly textDeltaIndexes = new Set<string>();
   private status: BridgeTurnStatus = 'running';
   private interrupted = false;
   private hitTokenLimit = false;
+  private failureNotice: string | undefined;
 
   get currentState(): BridgeTurnStatus {
     return this.status;
@@ -59,7 +66,10 @@ export class TurnProjection {
       this.status = 'completed';
       this.hitTokenLimit = true;
     }
-    else this.status = 'failed';
+    else {
+      this.status = 'failed';
+      if (reason.kind === 'error') this.failureNotice = noticeForFailure(reason.error);
+    }
   }
 
   fail(): void {
@@ -68,7 +78,9 @@ export class TurnProjection {
 
   finalText(): string {
     if (this.status === 'failed') {
-      return 'DeepSeek Harness failed to complete the turn. Check the DSH logs for details.';
+      const notice = this.failureNotice
+        ?? 'DeepSeek Harness failed to complete the turn.';
+      return `${notice} Retry the message or inspect the DSH surface for details.`;
     }
     const text = this.output.join('\n\n').trim();
     if (this.status === 'aborted') {
@@ -111,9 +123,13 @@ export function activityForSessionEvent(
   event: SessionEvent,
   conversationId: string,
   now = Date.now(),
+  options: SessionActivityOptions = {},
 ): CanonRuntimeActivityItem | null {
   const turn = 'turn' in event.data ? event.data.turn : undefined;
-  const runId = turn === undefined ? conversationId : `dsh:${conversationId}:${turn}`;
+  const projectedTurn = turn ?? options.activeTurn;
+  const runId = projectedTurn === undefined
+    ? `dsh:${conversationId}:session`
+    : `dsh:${conversationId}:${projectedTurn}`;
 
   if (event.type === 'turn/start') {
     return {
@@ -156,18 +172,37 @@ export function activityForSessionEvent(
   }
 
   if (event.type === 'tool/result') {
-    const failed = event.data.error !== undefined || event.data.message.content.some((block) => block.type === 'tool-result' && block.isError);
+    const results = event.data.message.content.filter((block) => block.type === 'tool-result');
+    const failed = event.data.error !== undefined || results.some((block) => block.isError);
+    const title = results
+      .map((block) => options.toolNamesByCallId?.get(String(block.toolCallId)))
+      .filter((name): name is string => name !== undefined)
+      .join(', ');
     return {
       id: `dsh-tool:${event.data.message.content[0]?.toolCallId ?? `${event.data.turn}:${event.data.step}`}`,
       runId,
       kind: 'tool',
-      title: safeDisplayText(event.data.message.content
-        .filter((block) => block.type === 'tool-result')
-        .map((block) => block.toolCallId)
-        .join(', '), 'DSH tool result'),
+      title: safeDisplayText(title, 'DSH tool result'),
       status: failed ? 'failed' : 'completed',
       updatedAt: now,
       endedAt: now,
+    };
+  }
+
+  if (event.type === 'todo/write') {
+    const total = event.data.todos.length;
+    const completed = event.data.todos.filter((todo) => todo.status === 'completed').length;
+    const running = event.data.todos.some((todo) => todo.status === 'in_progress');
+    const finished = total === 0 || completed === total;
+    return {
+      id: `dsh-plan:${conversationId}`,
+      runId,
+      kind: 'plan',
+      title: 'DeepSeek Harness plan',
+      status: finished ? 'completed' : running ? 'running' : 'pending',
+      progressText: total === 0 ? 'No pending tasks' : `${completed}/${total} tasks completed`,
+      updatedAt: now,
+      ...(finished ? { endedAt: now } : {}),
     };
   }
 
@@ -177,5 +212,44 @@ export function activityForSessionEvent(
 export function safeDisplayText(value: string, fallback: string, maxLength = 80): string {
   const title = value.replace(/[\r\n\t]+/g, ' ').trim();
   if (!title) return fallback;
-  return title.length <= maxLength ? title : `${title.slice(0, maxLength - 3)}...`;
+  const graphemes = Array.from(
+    new Intl.Segmenter(undefined, { granularity: 'grapheme' }).segment(title),
+    (part) => part.segment,
+  );
+  if (graphemes.length <= maxLength) return title;
+  if (maxLength <= 3) return '.'.repeat(Math.max(0, maxLength));
+  return `${graphemes.slice(0, maxLength - 3).join('')}...`;
+}
+
+function noticeForFailure(failure: LlmFailure): string | undefined {
+  if (failure.code === 'AUTH' || failure.code === 'INVALID_CREDENTIAL' || failure.code === 'MISSING_CREDENTIAL') {
+    return 'DeepSeek Harness could not authenticate with the model provider.';
+  }
+  if (failure.code === 'RATE_LIMIT' || failure.status === 429) {
+    return 'The model provider rate-limited the DeepSeek Harness request.';
+  }
+  if (failure.code === 'QUOTA') {
+    return 'The model provider reported that its quota is exhausted.';
+  }
+  if (
+    failure.code === 'TIMEOUT'
+    || failure.code === 'TRANSPORT'
+    || failure.code === 'ECONNRESET'
+    || failure.code === 'STREAM_CLOSED'
+  ) {
+    return 'DeepSeek Harness lost its connection to the model provider.';
+  }
+  if (failure.code === 'SERVER' || (failure.status !== undefined && failure.status >= 500)) {
+    return 'The model provider returned a server error to DeepSeek Harness.';
+  }
+  if (
+    failure.code === 'INVALID_REQUEST'
+    || failure.code === 'UNSUPPORTED_CONTENT'
+    || failure.code === 'UNSUPPORTED_OPTION'
+    || failure.code === 'UNSUPPORTED_REASONING_EFFORT'
+    || failure.code === 'UNKNOWN_MODEL'
+  ) {
+    return 'DeepSeek Harness could not submit this request to the selected model.';
+  }
+  return undefined;
 }
