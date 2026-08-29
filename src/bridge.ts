@@ -19,7 +19,7 @@ import {
   activityForSessionEvent,
   safeDisplayText,
 } from './event-mapping.js';
-import { createCanonUserMessage } from './messages.js';
+import { createCanonUserMessage, importCanonImages } from './messages.js';
 import {
   CanonSessionMap,
   dshSessionId,
@@ -33,6 +33,7 @@ interface ActiveCanonTurn {
   submittedMessageId?: MessageId;
   dshTurn?: number;
   readonly toolCallIds: Set<string>;
+  readonly toolNamesByCallId: Map<string, string>;
 }
 
 interface OwnedDshSession {
@@ -244,6 +245,7 @@ export class DeepSeekHarnessBridge {
         canonContext: context,
         projection: new TurnProjection(),
         toolCallIds: new Set(),
+        toolNamesByCallId: new Map(),
       };
       this.activeTurns.set(context.conversationId, active);
       const turnSession = owned;
@@ -251,7 +253,14 @@ export class DeepSeekHarnessBridge {
 
       await context.turn?.setThinking('DeepSeek Harness is working…');
       if (context.abortSignal.aborted) return;
-      const dshMessage = createCanonUserMessage(context);
+      const importedImages = await importCanonImages(context, this.deps.context.attachments);
+      if (importedImages.skipped > 0) {
+        this.log.warn(
+          'skipped %d Canon image attachment(s) that DSH could not accept',
+          importedImages.skipped,
+        );
+      }
+      const dshMessage = createCanonUserMessage(context, importedImages.refs);
       await this.enqueueSessionLifecycle(context.conversationId, async () => {
         if (context.abortSignal.aborted) return;
         await this.sessionMap.assertCurrent(context.conversationId, turnSession.sessionId);
@@ -433,7 +442,11 @@ export class DeepSeekHarnessBridge {
     const eventTurn = 'turn' in event.data ? event.data.turn : undefined;
     if (eventTurn !== undefined && eventTurn !== active.dshTurn) return;
 
-    if (event.type === 'tool/call') active.toolCallIds.add(String(event.data.callId));
+    if (event.type === 'tool/call') {
+      const callId = String(event.data.callId);
+      active.toolCallIds.add(callId);
+      active.toolNamesByCallId.set(callId, event.data.name);
+    }
 
     if (event.type === 'assistant/chunk') {
       active.projection.applyStreamChunk(
@@ -450,7 +463,10 @@ export class DeepSeekHarnessBridge {
       active.projection.finish(event.data.reason);
     }
 
-    const activity = activityForSessionEvent(event, conversationId);
+    const activity = activityForSessionEvent(event, conversationId, Date.now(), {
+      activeTurn: active.dshTurn,
+      toolNamesByCallId: active.toolNamesByCallId,
+    });
     if (activity) {
       const publish = this.deps.canonAgent.publishRuntimeActivity(conversationId, activity)
         .catch((error: unknown) => {

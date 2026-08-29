@@ -7,6 +7,7 @@ describe('Canon DSH Cordis plugin', () => {
     expect(name).toBe('canon-dsh');
     expect(inject).toEqual([
       'agents',
+      'attachments',
       'sessions',
       'approval',
       'sessionPersistence',

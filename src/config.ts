@@ -22,7 +22,7 @@ export const DSH_PLUGIN_CONFIG_KEYS = [
 ] as const satisfies ReadonlyArray<keyof PluginConfig>;
 
 const configShape = Schema.object({
-  canonProfile: Schema.string().default(process.env.CANON_AGENT ?? ''),
+  canonProfile: Schema.string().default(''),
   workspaceRoot: Schema.string().default(process.cwd()),
   provider: Schema.string(),
   model: Schema.string(),

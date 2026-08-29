@@ -8,9 +8,10 @@ persistence rows.
 Use the Canon app at [canonmail.com](https://canonmail.com) to approve your
 agent and message it after setup.
 
-The plugin uses DSH's public `ctx.agents` and session-event contracts. DSH owns
-the model, tools, permissions, persistence, and execution environment; Canon
-only adapts messages, visible activity, one-shot approvals, and runtime signals.
+The plugin uses DSH's public agent, attachment, approval, and session-event
+contracts. DSH owns the model, tools, permissions, persistence, and execution
+environment; Canon only adapts messages, native image references, visible
+activity, one-shot approvals, and runtime signals.
 
 ## Requirements
 
@@ -77,10 +78,14 @@ profile's normal model selection.
 
 - One durable DSH session per Canon conversation, resumed from DSH's
   event-sourced session log after restart.
-- A Canon message batch mapped to one immutable DSH user message.
+- A Canon message batch mapped to one immutable DSH user message. Canon's SDK
+  serializes batches per conversation; DSH's inbox remains the turn scheduler.
+- PNG, JPEG, WebP, and GIF inputs committed through DSH's durable attachment
+  store before the owning user message is appended. DSH's configured image
+  count, byte, dimension, and normalization policies remain authoritative.
 - Visible assistant text streaming.
-- Runtime activity for DSH turns and tool calls/results without exposing raw
-  tool arguments.
+- Runtime activity for DSH turns, tool calls/results, and aggregate todo
+  progress without exposing raw tool arguments or todo contents.
 - One-shot Canon approval cards for DSH approval requests.
 - Interrupt, stop-and-drop, and new-session signals.
 
@@ -91,6 +96,10 @@ DSH event log.
 
 Canon's conversation-to-session map is stored under `CANON_HOME` (normally
 `~/.canon`), never inside the project workspace.
+
+Images that are unsupported, unavailable, or outside the active DSH policy are
+left as Canon's safe text placeholders; their source URLs are never inserted
+into the model prompt or DSH session log by this bridge.
 
 ## Approval semantics
 
@@ -110,10 +119,13 @@ for this bridge because DSH has only one-shot grants.
 
 ## Current limitations
 
-- Canon attachments are represented as safe text placeholders; they are not yet
-  converted into native DSH image attachments.
-- DSH user questions remain owned by the selected DSH surface. They are not
-  conflated with Canon approval cards.
+- DSH user questions remain owned by the selected DSH surface. DSH
+  `0.1.1-rc.2` permits one active question provider, which the Web surface
+  already owns, so this plugin cannot add a Canon answerer without replacing
+  that surface. Canon question cards will be wired when DSH publishes its
+  scoped, composable question-request seam; questions are not conflated with
+  approval cards in the meantime.
+- Non-image Canon attachments remain safe text placeholders.
 - Provider/model, permission mode, effort, workspace selection, execution mode,
   session-state snapshots, rich cards, and steering/interleave are not
   advertised as Canon controls until the bridge can validate and enforce each
