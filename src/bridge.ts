@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 
 import type { Context } from '@deepseek-ai/cordis';
@@ -9,6 +9,12 @@ import type {
   ApprovalOutcome,
   ApprovalRequest,
 } from '@deepseek-ai/dsh-user-approval';
+import {
+  UserQuestionError,
+  type AskUserQuestionAnswer,
+  type AskUserQuestionRequest,
+} from '@deepseek-ai/dsh-user-questions';
+import type { PlanModeController } from '@deepseek-ai/dsh-plan-mode';
 import type {} from '@deepseek-ai/dsh-session-persistence';
 import { CanonAgent } from '@canonmsg/agent-sdk';
 import type { MessageHandlerContext } from '@canonmsg/agent-sdk';
@@ -25,6 +31,12 @@ import {
   dshSessionId,
 } from './session-map.js';
 import type { PluginConfig } from './config.js';
+import {
+  planReviewQuestion,
+  toCanonQuestionBatch,
+  toDshPlanAnswer,
+  toDshQuestionAnswer,
+} from './user-questions.js';
 
 interface ActiveCanonTurn {
   conversationId: string;
@@ -62,6 +74,7 @@ interface BridgeDeps {
   config: PluginConfig;
   profile: ResolvedAgent;
   canonAgent: CanonAgent;
+  getPlanMode?: () => Pick<PlanModeController, 'set'> | undefined;
   /** Test seam; production state belongs under CANON_HOME. */
   stateRoot?: string;
 }
@@ -119,6 +132,70 @@ export class DeepSeekHarnessBridge {
   async start(): Promise<void> {
     this.deps.canonAgent.on('message', (context) => this.handleCanonMessage(context));
     await this.deps.canonAgent.start();
+  }
+
+  async answerUserQuestions(
+    request: AskUserQuestionRequest,
+  ): Promise<AskUserQuestionAnswer> {
+    const sessionId = request.agent?.id;
+    const conversationId = sessionId === undefined
+      ? undefined
+      : this.conversationsBySessionId.get(String(sessionId));
+    const active = conversationId === undefined
+      ? undefined
+      : this.activeTurns.get(conversationId);
+    if (!active) {
+      throw new UserQuestionError(
+        'no active Canon turn owns this DSH user question',
+        'NO_CANON_ROUTE',
+      );
+    }
+    if (request.signal?.aborted || active.canonContext.abortSignal.aborted) {
+      throw new UserQuestionError(
+        'ask_user_question was aborted before the user answered',
+        'ASK_ABORTED',
+      );
+    }
+
+    const planQuestion = planReviewQuestion(request);
+    if (planQuestion) {
+      const result = await active.canonContext.requestPlanReview({
+        planId: randomUUID(),
+        title: safeDisplayText(planQuestion.header ?? 'Plan review', 'Plan review', 160),
+        summary: safeDisplayText(planQuestion.question, 'Review the proposed plan.', 2_000),
+        body: planQuestion.detail,
+        turnId: active.canonContext.turn?.id,
+        timeoutMs: 10 * 60_000,
+        signal: request.signal,
+      });
+      if (result.status === 'approve' || result.status === 'revise' || result.status === 'reject') {
+        return toDshPlanAnswer(planQuestion, result);
+      }
+      throw this.questionClosed(result.status);
+    }
+
+    const batch = toCanonQuestionBatch(request);
+    const inputId = randomUUID();
+    const result = await active.canonContext.requestRuntimeInput({
+      inputId,
+      kind: 'clarify',
+      title: 'DeepSeek Harness needs input',
+      prompt: 'Answer to continue the current DSH turn.',
+      questions: batch.questions,
+      native: {
+        runtime: 'deepseek-harness',
+        method: 'ask_user_question',
+        requestId: inputId,
+        turnId: active.canonContext.turn?.id,
+      },
+      turnId: active.canonContext.turn?.id,
+      timeoutMs: 10 * 60_000,
+      signal: request.signal,
+    });
+    if (result.status === 'submitted') {
+      return toDshQuestionAnswer(batch, result.answers);
+    }
+    throw this.questionClosed(result.status);
   }
 
   async interrupt({ conversationId }: RuntimeSignalContext): Promise<void> {
@@ -250,6 +327,14 @@ export class DeepSeekHarnessBridge {
       this.activeTurns.set(context.conversationId, active);
       const turnSession = owned;
       const activeTurn = active;
+
+      if (this.deps.config.planMode) {
+        const planMode = this.deps.getPlanMode?.();
+        if (!planMode) {
+          throw new Error('canon-dsh: planMode is enabled but the DSH planMode service is unavailable');
+        }
+        planMode.set(turnSession.handle.agent, context.requestedTurnMode === 'plan');
+      }
 
       await context.turn?.setThinking('DeepSeek Harness is working…');
       if (context.abortSignal.aborted) return;
@@ -534,6 +619,15 @@ export class DeepSeekHarnessBridge {
 
   private get log() {
     return this.deps.context.logger('canon-dsh');
+  }
+
+  private questionClosed(status: 'cancelled' | 'timeout'): UserQuestionError {
+    return new UserQuestionError(
+      status === 'timeout'
+        ? 'Canon user question timed out before the user answered'
+        : 'The user cancelled the Canon question',
+      status === 'timeout' ? 'ASK_TIMEOUT' : 'ASK_CANCELLED',
+    );
   }
 }
 

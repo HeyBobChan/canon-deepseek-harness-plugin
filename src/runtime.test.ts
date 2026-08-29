@@ -45,4 +45,12 @@ describe('DeepSeek Harness runtime descriptor', () => {
     expect(redacted.runtimeDescriptor?.presentation?.fields?.workspaceRoot)
       .toEqual({ visibility: 'hidden' });
   });
+
+  it('advertises only the DSH plan mode that the bridge explicitly enables', () => {
+    expect(createDeepSeekHarnessRuntimeDescriptor('/workspace').turnModes).toBeUndefined();
+    expect(createDeepSeekHarnessRuntimeDescriptor('/workspace', true).turnModes).toEqual([
+      expect.objectContaining({ id: 'normal', default: true }),
+      expect.objectContaining({ id: 'plan', ownerOnly: true }),
+    ]);
+  });
 });

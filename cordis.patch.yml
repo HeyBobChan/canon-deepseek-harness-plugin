@@ -9,4 +9,8 @@
         workspaceRoot: !!js process.env.CANON_DSH_WORKSPACE ?? process.cwd()
         provider: !!js process.env.DSH_PROVIDER
         model: !!js process.env.DSH_MODEL
+        # Normal DSH Web owns the single user-question provider. Headless
+        # compositions may set this field to `canon` explicitly.
+        questionProvider: external
+        planMode: false
       disabled: !!js process.env.CANON_DSH_DISABLED === '1'

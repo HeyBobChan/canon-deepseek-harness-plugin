@@ -10,8 +10,8 @@ agent and message it after setup.
 
 The plugin uses DSH's public agent, attachment, approval, and session-event
 contracts. DSH owns the model, tools, permissions, persistence, and execution
-environment; Canon only adapts messages, native image references, visible
-activity, one-shot approvals, and runtime signals.
+environment; Canon adapts messages, native image references, visible activity,
+one-shot approvals, optional user questions/plan review, and runtime signals.
 
 ## Requirements
 
@@ -74,6 +74,14 @@ The bundle row reads these environment expressions:
 `DSH_PROVIDER` and `DSH_MODEL` must be supplied together. Omit both to use the
 profile's normal model selection.
 
+Two plugin fields are intentionally composition-owned rather than inferred:
+
+- `questionProvider: external | canon` selects the one DSH user-question
+  provider for this Cordis context. The published Web-compatible patch uses
+  `external`; a headless Canon deployment uses `canon`.
+- `planMode: boolean` advertises Canon's Plan turn mode and requires a composed
+  `ctx.planMode` service. It is off in the generic patch.
+
 ## What the bridge supports
 
 - One durable DSH session per Canon conversation, resumed from DSH's
@@ -90,6 +98,12 @@ profile's normal model selection.
 - Runtime activity for DSH turns, tool calls/results, and aggregate todo
   progress without exposing raw tool arguments or todo contents.
 - One-shot Canon approval cards for DSH approval requests.
+- Structured `ask_user_question` requests rendered as Canon runtime-input
+  cards when `questionProvider: canon`; selected labels and custom answers are
+  mapped back into DSH's native answer vocabulary.
+- DSH `plan-review` intent rendered as Canon's native plan-review card, with
+  approve, keep-planning, and revision feedback mapped back to DSH.
+- Optional Canon Plan turn mode backed by DSH's own logged `planMode` service.
 - Interrupt, stop-and-drop, and new-session signals.
 
 Canon interrupt aborts the active DSH turn with `keepInbox: true`. Stop-and-drop
@@ -122,18 +136,17 @@ for this bridge because DSH has only one-shot grants.
 
 ## Current limitations
 
-- DSH user questions remain owned by the selected DSH surface. DSH
-  `0.1.1-rc.2` permits one active question provider, which the Web surface
-  already owns, so this plugin cannot add a Canon answerer without replacing
-  that surface. Canon question cards will be wired when DSH publishes its
-  scoped, composable question-request seam; questions are not conflated with
-  approval cards in the meantime.
+- DSH `0.1.1-rc.2` permits only one active user-question provider in a Cordis
+  context. Canon questions therefore require `questionProvider: canon` in a
+  headless/Canon-owned composition; that setting must not be combined with the
+  Web API proxy's provider. Supporting both surfaces simultaneously requires a
+  future routed/multiplexed DSH provider seam.
 - Non-image Canon attachments remain safe text placeholders.
 - Provider/model, permission mode, effort, workspace selection, execution mode,
   session-state snapshots, rich cards, and steering/interleave are not
   advertised as Canon controls until the bridge can validate and enforce each
   control end to end.
-- The initial package is tested against DSH `0.1.1-rc.2` only.
+- The package is tested against DSH `0.1.1-rc.2` only.
 
 ## Troubleshooting
 
