@@ -78,6 +78,9 @@ profile's normal model selection.
 
 - One durable DSH session per Canon conversation, resumed from DSH's
   event-sourced session log after restart.
+- Native Cordis lifecycle behavior: the plugin becomes active after launching
+  Canon delivery, while the long-lived SSE loop remains owned by its reversible
+  plugin effect and is stopped on unload or hot replacement.
 - A Canon message batch mapped to one immutable DSH user message. Canon's SDK
   serializes batches per conversation; DSH's inbox remains the turn scheduler.
 - PNG, JPEG, WebP, and GIF inputs committed through DSH's durable attachment
