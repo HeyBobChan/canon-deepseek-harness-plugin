@@ -19,6 +19,8 @@ import {
   renderCodingHostInboundPrompt,
 } from '@canonmsg/core';
 
+import { CANON_NO_REPLY_TOOL_NAME } from './no-reply-tool.js';
+
 type DshAttachmentWriter = Pick<AttachmentStore, 'imageLimits' | 'saveImages'>;
 
 export interface CanonImageImport {
@@ -144,7 +146,9 @@ export function formatCanonMessages(context: MessageHandlerContext): string {
       ? context.turnContext
       : frameTurnContextForEarlierMessage(context, message);
     const frame = buildCanonInboundFrameV1(turnContext);
-    const prompt = renderCodingHostInboundPrompt(frame);
+    const prompt = renderCodingHostInboundPrompt(frame, {
+      noReplyToolName: CANON_NO_REPLY_TOOL_NAME,
+    });
     return frame.shape === 'direct_owner'
       ? `Message from your Canon owner:\n\n${prompt}`
       : prompt;

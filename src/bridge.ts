@@ -42,6 +42,7 @@ import {
   communicationIsEnabled,
   createDeepSeekHarnessCommunicationTool,
 } from './communication-tool.js';
+import { createDeepSeekHarnessNoReplyTool } from './no-reply-tool.js';
 
 interface ActiveCanonTurn {
   conversationId: string;
@@ -52,6 +53,8 @@ interface ActiveCanonTurn {
   readonly toolCallIds: Set<string>;
   readonly toolNamesByCallId: Map<string, string>;
   disposeCommunicationTool?: () => void;
+  disposeNoReplyTool?: () => void;
+  noReplyRequested?: boolean;
 }
 
 interface OwnedDshSession {
@@ -95,6 +98,7 @@ export class DeepSeekHarnessBridge {
   private readonly pendingApprovalCancellers = new Set<AbortController>();
   private readonly sessionMap: CanonSessionMap;
   private readonly communicationTool: ToolDefinition;
+  private readonly noReplyTool: ToolDefinition;
   private disposed = false;
   private disposePromise: Promise<void> | null = null;
 
@@ -112,6 +116,19 @@ export class DeepSeekHarnessBridge {
       return conversationId === undefined
         ? undefined
         : this.activeTurns.get(conversationId)?.canonContext;
+    });
+    this.noReplyTool = createDeepSeekHarnessNoReplyTool((sessionId) => {
+      const conversationId = this.conversationsBySessionId.get(sessionId);
+      const active = conversationId === undefined
+        ? undefined
+        : this.activeTurns.get(conversationId);
+      if (!active) return undefined;
+      return {
+        turn: active.canonContext.turn,
+        latchNoReply: () => {
+          active.noReplyRequested = true;
+        },
+      };
     });
 
     deps.context.on('session/event', (session: Session, event: SessionEvent) => {
@@ -343,6 +360,10 @@ export class DeepSeekHarnessBridge {
       const turnSession = owned;
       const activeTurn = active;
 
+      active.disposeNoReplyTool = turnSession.handle.agent.ctx.tools.register(
+        this.noReplyTool,
+      );
+
       if (communicationIsEnabled(context)) {
         active.disposeCommunicationTool = turnSession.handle.agent.ctx.tools.register(
           this.communicationTool,
@@ -386,20 +407,37 @@ export class DeepSeekHarnessBridge {
         turnSession.confirmed = true;
       }
 
-      if (!context.abortSignal.aborted) {
-        await context.replyFinal(activeTurn.projection.finalText());
+      if (!context.abortSignal.aborted && !activeTurn.noReplyRequested) {
+        await context.replyFinal(
+          activeTurn.projection.finalText(),
+          activeTurn.projection.shouldSuppressAutoReply()
+            ? { metadata: { replyBehavior: 'suppress_auto_reply' } }
+            : undefined,
+        );
       }
     } catch (error) {
       if (!active) throw error;
       active.projection.fail();
-      if (!context.abortSignal.aborted) {
-        await context.replyFinal(active.projection.finalText());
+      if (!context.abortSignal.aborted && !active.noReplyRequested) {
+        await context.replyFinal(active.projection.finalText(), {
+          metadata: { replyBehavior: 'suppress_auto_reply' },
+        });
       }
     } finally {
       if (abortListenerAdded) context.abortSignal.removeEventListener('abort', abortHandler);
-      active?.disposeCommunicationTool?.();
       if (active && this.activeTurns.get(context.conversationId) === active) {
         this.activeTurns.delete(context.conversationId);
+      }
+      const disposers = [
+        ['communicate', active?.disposeCommunicationTool],
+        ['no_reply', active?.disposeNoReplyTool],
+      ] as const;
+      for (const [name, dispose] of disposers) {
+        try {
+          dispose?.();
+        } catch (error) {
+          this.log.warn('failed to unmount Canon %s tool: %s', name, errorMessage(error));
+        }
       }
     }
   }

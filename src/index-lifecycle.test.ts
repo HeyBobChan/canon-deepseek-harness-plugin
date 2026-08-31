@@ -45,6 +45,11 @@ const bridgeCapture = vi.hoisted(() => ({
 
 vi.mock('@canonmsg/core', () => core);
 vi.mock('@canonmsg/agent-tools', () => ({
+  canonVerbToolDefinitions: () => [{
+    name: 'no_reply',
+    description: 'End the turn without posting.',
+    inputSchema: { type: 'object' },
+  }],
   canonCommunicateToolDefinition: (name = 'communicate') => ({
     name,
     description: 'Communicate in Canon.',

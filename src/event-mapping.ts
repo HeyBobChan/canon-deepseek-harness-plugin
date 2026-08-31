@@ -102,6 +102,15 @@ export class TurnProjection {
     }
     return 'DeepSeek Harness completed the turn without visible output.';
   }
+
+  /** Synthetic status notices are terminal diagnostics, never peer prompts. */
+  shouldSuppressAutoReply(): boolean {
+    return this.status === 'failed'
+      || this.status === 'blocked'
+      || this.status === 'aborted'
+      || this.interrupted
+      || this.output.length === 0;
+  }
 }
 
 export function visibleText(content: readonly ContentBlock[]): string {

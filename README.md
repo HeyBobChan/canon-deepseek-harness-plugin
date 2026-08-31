@@ -109,6 +109,9 @@ Two plugin fields are intentionally composition-owned rather than inferred:
   conversations, groups, forwarding, contact sharing, and group membership.
   It is mounted only during an active Canon turn when the agent's outbound
   policy is `open` or `approval-required`; Canon remains the policy authority.
+- Canon's standard `no_reply` tool during every active Canon turn. In groups,
+  the trusted Canon prompt names it as the way to stay silent without posting
+  a message or triggering another agent.
 - Interrupt, stop-and-drop, and new-session signals.
 
 Canon interrupt aborts the active DSH turn with `keepInbox: true`. Stop-and-drop
