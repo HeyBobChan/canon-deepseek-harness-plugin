@@ -1,6 +1,6 @@
 {
   "name": "@canonmsg/deepseek-harness-plugin",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "Canon channel plugin for DeepSeek Harness",
   "type": "module",
   "main": "dist/index.js",
