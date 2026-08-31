@@ -77,6 +77,30 @@ describe('DSH event mapping', () => {
     expect(interruptedMarker.finalText()).toContain('interrupted this response');
   });
 
+  it('suppresses auto-replies for synthetic failure, blocked, empty, and interruption notices', () => {
+    const completed = new TurnProjection();
+    completed.applyAssistantMessage(assistant('A substantive answer.'));
+    completed.finish({ kind: 'completed' } as TurnEndReason);
+    expect(completed.shouldSuppressAutoReply()).toBe(false);
+
+    const failed = new TurnProjection();
+    failed.finish({ kind: 'error', error: { message: 'failure' } } as TurnEndReason);
+    expect(failed.shouldSuppressAutoReply()).toBe(true);
+
+    const blocked = new TurnProjection();
+    blocked.finish({ kind: 'blocked' } as TurnEndReason);
+    expect(blocked.shouldSuppressAutoReply()).toBe(true);
+
+    const empty = new TurnProjection();
+    empty.finish({ kind: 'completed' } as TurnEndReason);
+    expect(empty.shouldSuppressAutoReply()).toBe(true);
+
+    const interrupted = new TurnProjection();
+    interrupted.applyAssistantMessage(assistant('Partial.'), true);
+    interrupted.finish({ kind: 'completed' } as TurnEndReason);
+    expect(interrupted.shouldSuppressAutoReply()).toBe(true);
+  });
+
   it('maps tool lifecycle without raw arguments', () => {
     const started = activityForSessionEvent(event('tool/call', {
       turn: 1,

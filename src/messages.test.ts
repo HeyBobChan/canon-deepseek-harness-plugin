@@ -266,6 +266,7 @@ describe('Canon to DSH messages', () => {
 
     expect(prompt).toContain('Bob spoke in a group.');
     expect(prompt).toContain('They addressed you.');
+    expect(prompt).toContain('call `no_reply` to stay silent');
     expect(prompt).toContain('DSH, inspect the flaky test.');
   });
 

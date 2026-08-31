@@ -27,6 +27,16 @@ function deferred<T>(): Deferred<T> {
   return { promise, resolve: resolve! };
 }
 
+function dshToolContext() {
+  return {
+    ctx: {
+      tools: {
+        register: vi.fn(() => vi.fn()),
+      },
+    },
+  };
+}
+
 function createMessageContext(input: {
   id?: string;
   text?: string;
@@ -79,7 +89,10 @@ function createMessageContext(input: {
       outboundPolicy: input.outboundPolicy ?? 'closed',
     },
     communicate: vi.fn(),
-    turn: { setThinking: vi.fn(async () => undefined) },
+    turn: {
+      setThinking: vi.fn(async () => undefined),
+      noReply: vi.fn(async () => undefined),
+    },
     requestRuntimeInput: vi.fn(),
     requestPlanReview: vi.fn(),
     replyFinal: vi.fn(async () => ({ messageId: 'final', messageIds: ['final'] })),
@@ -244,6 +257,7 @@ describe('DeepSeek Harness bridge lifecycle', () => {
     let persisted = false;
     const agent = {
       id: '',
+      ...dshToolContext(),
       followup: vi.fn(),
       cancel: vi.fn(),
       whenIdle: vi.fn(async () => undefined),
@@ -274,7 +288,7 @@ describe('DeepSeek Harness bridge lifecycle', () => {
     expect(planMode.set).toHaveBeenNthCalledWith(2, agent, false);
   });
 
-  it('mounts one scoped communicate tool only for the active enabled Canon turn', async () => {
+  it('mounts no_reply on every active turn and communicate only when policy allows it', async () => {
     const { bridge, context } = await createBridge();
     const stored = await (bridge as unknown as {
       sessionMap: { getOrCreate: (conversationId: string) => Promise<{ sessionId: string }> };
@@ -297,6 +311,8 @@ describe('DeepSeek Harness bridge lifecycle', () => {
       confirmed: true,
       handle: { agent, dispose: vi.fn(async () => undefined) },
     });
+    (bridge as unknown as { conversationsBySessionId: Map<string, string> })
+      .conversationsBySessionId.set(stored.sessionId, 'conversation-1');
     (context.sessions as Mutable<Context['sessions']>).flush = vi.fn(async () => true);
 
     const enabled = createMessageContext({ outboundPolicy: 'approval-required' });
@@ -304,17 +320,74 @@ describe('DeepSeek Harness bridge lifecycle', () => {
       handleCanonMessage: (input: unknown) => Promise<void>;
     }).handleCanonMessage(enabled);
 
-    expect(register).toHaveBeenCalledWith(expect.objectContaining({
-      name: 'communicate',
-      execute: expect.any(Function),
-    }));
+    expect(register.mock.calls.map(([tool]) => (tool as { name: string }).name)).toEqual([
+      'no_reply',
+      'communicate',
+    ]);
     expect(followup).toHaveBeenCalledTimes(1);
-    expect(disposeTool).toHaveBeenCalledTimes(1);
+    expect(disposeTool).toHaveBeenCalledTimes(2);
+    expect(enabled.replyFinal).toHaveBeenCalledWith(
+      'DeepSeek Harness completed the turn without visible output.',
+      { metadata: { replyBehavior: 'suppress_auto_reply' } },
+    );
 
     await (bridge as unknown as {
       handleCanonMessage: (input: unknown) => Promise<void>;
     }).handleCanonMessage(createMessageContext({ id: 'message-closed' }));
-    expect(register).toHaveBeenCalledTimes(1);
+    expect(register.mock.calls.map(([tool]) => (tool as { name: string }).name)).toEqual([
+      'no_reply',
+      'communicate',
+      'no_reply',
+    ]);
+    expect(disposeTool).toHaveBeenCalledTimes(3);
+  });
+
+  it('maps the DSH no_reply tool to Canon deliberate silence and posts no fallback', async () => {
+    const { bridge, context } = await createBridge();
+    const stored = await (bridge as unknown as {
+      sessionMap: { getOrCreate: (conversationId: string) => Promise<{ sessionId: string }> };
+    }).sessionMap.getOrCreate('conversation-1');
+    const registered = new Map<string, { execute: (args: unknown, context: unknown) => Promise<unknown> }>();
+    const disposeTool = vi.fn();
+    const agent = {
+      id: stored.sessionId,
+      ctx: {
+        tools: {
+          register: vi.fn((tool: { name: string; execute: (args: unknown, context: unknown) => Promise<unknown> }) => {
+            registered.set(tool.name, tool);
+            return disposeTool;
+          }),
+        },
+      },
+      inbox: { remove: vi.fn() },
+      cancel: vi.fn(),
+      followup: vi.fn(),
+      whenIdle: vi.fn(async () => {
+        await registered.get('no_reply')?.execute(
+          { reason: 'Another participant answered.' },
+          { agent, signal: new AbortController().signal },
+        );
+      }),
+      session: {},
+    };
+    (bridge as unknown as { sessions: Map<string, unknown> }).sessions.set('conversation-1', {
+      conversationId: 'conversation-1',
+      sessionId: stored.sessionId,
+      confirmed: true,
+      handle: { agent, dispose: vi.fn(async () => undefined) },
+    });
+    (bridge as unknown as { conversationsBySessionId: Map<string, string> })
+      .conversationsBySessionId.set(stored.sessionId, 'conversation-1');
+    (context.sessions as Mutable<Context['sessions']>).flush = vi.fn(async () => true);
+    const message = createMessageContext();
+
+    await (bridge as unknown as {
+      handleCanonMessage: (input: unknown) => Promise<void>;
+    }).handleCanonMessage(message);
+
+    expect(message.turn.noReply).toHaveBeenCalledWith('Another participant answered.');
+    expect(message.replyFinal).not.toHaveBeenCalled();
+    expect(disposeTool).toHaveBeenCalledTimes(1);
   });
 
   it('creates a session through the agent factory', async () => {
@@ -402,6 +475,7 @@ describe('DeepSeek Harness bridge lifecycle', () => {
     creating.resolve({
       agent: {
         id: sessionId,
+        ...dshToolContext(),
         cancel,
         followup,
         whenIdle: vi.fn(async () => undefined),
@@ -438,6 +512,7 @@ describe('DeepSeek Harness bridge lifecycle', () => {
     const followup = vi.fn();
     const agent = {
       id: stored.sessionId,
+      ...dshToolContext(),
       inbox: { remove },
       cancel,
       followup,
@@ -540,6 +615,7 @@ describe('DeepSeek Harness bridge lifecycle', () => {
     creations[1].resolve({
       agent: {
         id: sessionIds[1],
+        ...dshToolContext(),
         cancel: vi.fn(),
         followup: secondFollowup,
         whenIdle: vi.fn(async () => undefined),
