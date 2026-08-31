@@ -32,6 +32,7 @@ function createMessageContext(input: {
   text?: string;
   controller?: AbortController;
   requestedTurnMode?: string | null;
+  outboundPolicy?: 'open' | 'approval-required' | 'closed';
 } = {}) {
   const controller = input.controller ?? new AbortController();
   const id = input.id ?? 'message-1';
@@ -73,7 +74,11 @@ function createMessageContext(input: {
       },
       message: { id, contentType: 'text' as const, renderedContent: text },
     },
-    agent: { agentId: 'agent-dsh' },
+    agent: {
+      agentId: 'agent-dsh',
+      outboundPolicy: input.outboundPolicy ?? 'closed',
+    },
+    communicate: vi.fn(),
     turn: { setThinking: vi.fn(async () => undefined) },
     requestRuntimeInput: vi.fn(),
     requestPlanReview: vi.fn(),
@@ -267,6 +272,49 @@ describe('DeepSeek Harness bridge lifecycle', () => {
 
     expect(planMode.set).toHaveBeenNthCalledWith(1, agent, true);
     expect(planMode.set).toHaveBeenNthCalledWith(2, agent, false);
+  });
+
+  it('mounts one scoped communicate tool only for the active enabled Canon turn', async () => {
+    const { bridge, context } = await createBridge();
+    const stored = await (bridge as unknown as {
+      sessionMap: { getOrCreate: (conversationId: string) => Promise<{ sessionId: string }> };
+    }).sessionMap.getOrCreate('conversation-1');
+    const disposeTool = vi.fn();
+    const register = vi.fn(() => disposeTool);
+    const followup = vi.fn();
+    const agent = {
+      id: stored.sessionId,
+      ctx: { tools: { register } },
+      inbox: { remove: vi.fn() },
+      cancel: vi.fn(),
+      followup,
+      whenIdle: vi.fn(async () => undefined),
+      session: {},
+    };
+    (bridge as unknown as { sessions: Map<string, unknown> }).sessions.set('conversation-1', {
+      conversationId: 'conversation-1',
+      sessionId: stored.sessionId,
+      confirmed: true,
+      handle: { agent, dispose: vi.fn(async () => undefined) },
+    });
+    (context.sessions as Mutable<Context['sessions']>).flush = vi.fn(async () => true);
+
+    const enabled = createMessageContext({ outboundPolicy: 'approval-required' });
+    await (bridge as unknown as {
+      handleCanonMessage: (input: unknown) => Promise<void>;
+    }).handleCanonMessage(enabled);
+
+    expect(register).toHaveBeenCalledWith(expect.objectContaining({
+      name: 'communicate',
+      execute: expect.any(Function),
+    }));
+    expect(followup).toHaveBeenCalledTimes(1);
+    expect(disposeTool).toHaveBeenCalledTimes(1);
+
+    await (bridge as unknown as {
+      handleCanonMessage: (input: unknown) => Promise<void>;
+    }).handleCanonMessage(createMessageContext({ id: 'message-closed' }));
+    expect(register).toHaveBeenCalledTimes(1);
   });
 
   it('creates a session through the agent factory', async () => {

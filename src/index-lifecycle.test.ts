@@ -44,6 +44,14 @@ const bridgeCapture = vi.hoisted(() => ({
 }));
 
 vi.mock('@canonmsg/core', () => core);
+vi.mock('@canonmsg/agent-tools', () => ({
+  canonCommunicateToolDefinition: (name = 'communicate') => ({
+    name,
+    description: 'Communicate in Canon.',
+    inputSchema: { type: 'object' },
+  }),
+  parseCommunicateToolInput: (value: unknown) => value,
+}));
 vi.mock('@canonmsg/agent-sdk', () => ({
   CanonAgent: class {
     constructor(options: Record<string, unknown>) {

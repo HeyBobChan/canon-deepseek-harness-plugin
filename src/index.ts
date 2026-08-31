@@ -20,6 +20,7 @@ export const inject = [
   'sessions',
   'approval',
   'sessionPersistence',
+  'tools',
 ];
 
 export { Config };
