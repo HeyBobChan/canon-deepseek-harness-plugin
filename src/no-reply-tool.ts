@@ -5,7 +5,9 @@ import type { ToolDefinition, ToolRunContext } from '@deepseek-ai/dsh-tools';
 
 export const CANON_NO_REPLY_TOOL_NAME = 'no_reply';
 
-type ActiveNoReplyContext = Pick<MessageHandlerContext, 'turn'>;
+type ActiveNoReplyContext = Pick<MessageHandlerContext, 'turn'> & {
+  latchNoReply: () => void;
+};
 
 const canonicalNoReply = (() => {
   const definition = canonVerbToolDefinitions({
@@ -21,7 +23,6 @@ const canonicalNoReply = (() => {
 /** Project Canon's standard deliberate-silence verb into the active DSH turn. */
 export function createDeepSeekHarnessNoReplyTool(
   resolveContext: (dshSessionId: string) => ActiveNoReplyContext | undefined,
-  onNoReply: (dshSessionId: string) => void,
 ): ToolDefinition {
   return {
     name: canonicalNoReply.name,
@@ -55,7 +56,10 @@ export function createDeepSeekHarnessNoReplyTool(
         ? args.reason
         : undefined;
       await context.turn.noReply(reason);
-      onNoReply(String(sessionId));
+      // The resolver captures the exact active turn. Do not look it up again
+      // after the await: a concurrent new-session/dispose can remove or replace
+      // the session mapping while Canon's local silence decision is settling.
+      context.latchNoReply();
       return { status: 'acknowledged', note: NO_REPLY_ACK_NOTE };
     },
   };

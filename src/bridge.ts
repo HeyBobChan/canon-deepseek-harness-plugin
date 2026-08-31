@@ -117,21 +117,19 @@ export class DeepSeekHarnessBridge {
         ? undefined
         : this.activeTurns.get(conversationId)?.canonContext;
     });
-    this.noReplyTool = createDeepSeekHarnessNoReplyTool(
-      (sessionId) => {
-        const conversationId = this.conversationsBySessionId.get(sessionId);
-        return conversationId === undefined
-          ? undefined
-          : this.activeTurns.get(conversationId)?.canonContext;
-      },
-      (sessionId) => {
-        const conversationId = this.conversationsBySessionId.get(sessionId);
-        const active = conversationId === undefined
-          ? undefined
-          : this.activeTurns.get(conversationId);
-        if (active) active.noReplyRequested = true;
-      },
-    );
+    this.noReplyTool = createDeepSeekHarnessNoReplyTool((sessionId) => {
+      const conversationId = this.conversationsBySessionId.get(sessionId);
+      const active = conversationId === undefined
+        ? undefined
+        : this.activeTurns.get(conversationId);
+      if (!active) return undefined;
+      return {
+        turn: active.canonContext.turn,
+        latchNoReply: () => {
+          active.noReplyRequested = true;
+        },
+      };
+    });
 
     deps.context.on('session/event', (session: Session, event: SessionEvent) => {
       this.handleSessionEvent(session, event);
@@ -427,10 +425,19 @@ export class DeepSeekHarnessBridge {
       }
     } finally {
       if (abortListenerAdded) context.abortSignal.removeEventListener('abort', abortHandler);
-      active?.disposeCommunicationTool?.();
-      active?.disposeNoReplyTool?.();
       if (active && this.activeTurns.get(context.conversationId) === active) {
         this.activeTurns.delete(context.conversationId);
+      }
+      const disposers = [
+        ['communicate', active?.disposeCommunicationTool],
+        ['no_reply', active?.disposeNoReplyTool],
+      ] as const;
+      for (const [name, dispose] of disposers) {
+        try {
+          dispose?.();
+        } catch (error) {
+          this.log.warn('failed to unmount Canon %s tool: %s', name, errorMessage(error));
+        }
       }
     }
   }

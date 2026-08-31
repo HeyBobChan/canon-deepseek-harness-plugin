@@ -390,6 +390,110 @@ describe('DeepSeek Harness bridge lifecycle', () => {
     expect(disposeTool).toHaveBeenCalledTimes(1);
   });
 
+  it('keeps no_reply latched when the session mapping disappears while silence settles', async () => {
+    const { bridge, context } = await createBridge();
+    const stored = await (bridge as unknown as {
+      sessionMap: { getOrCreate: (conversationId: string) => Promise<{ sessionId: string }> };
+    }).sessionMap.getOrCreate('conversation-1');
+    const registered = new Map<string, { execute: (args: unknown, context: unknown) => Promise<unknown> }>();
+    const silenceStarted = deferred<void>();
+    const settleSilence = deferred<void>();
+    const agent = {
+      id: stored.sessionId,
+      ctx: {
+        tools: {
+          register: vi.fn((tool: { name: string; execute: (args: unknown, context: unknown) => Promise<unknown> }) => {
+            registered.set(tool.name, tool);
+            return vi.fn();
+          }),
+        },
+      },
+      inbox: { remove: vi.fn() },
+      cancel: vi.fn(),
+      followup: vi.fn(),
+      whenIdle: vi.fn(async () => {
+        await registered.get('no_reply')?.execute(
+          {},
+          { agent, signal: new AbortController().signal },
+        );
+      }),
+      session: {},
+    };
+    (bridge as unknown as { sessions: Map<string, unknown> }).sessions.set('conversation-1', {
+      conversationId: 'conversation-1',
+      sessionId: stored.sessionId,
+      confirmed: true,
+      handle: { agent, dispose: vi.fn(async () => undefined) },
+    });
+    const internals = bridge as unknown as {
+      conversationsBySessionId: Map<string, string>;
+      handleCanonMessage: (input: unknown) => Promise<void>;
+    };
+    internals.conversationsBySessionId.set(stored.sessionId, 'conversation-1');
+    (context.sessions as Mutable<Context['sessions']>).flush = vi.fn(async () => true);
+    const message = createMessageContext();
+    message.turn.noReply.mockImplementationOnce(async () => {
+      silenceStarted.resolve(undefined);
+      await settleSilence.promise;
+    });
+
+    const handling = internals.handleCanonMessage(message);
+    await silenceStarted.promise;
+    internals.conversationsBySessionId.delete(stored.sessionId);
+    settleSilence.resolve(undefined);
+    await handling;
+
+    expect(message.replyFinal).not.toHaveBeenCalled();
+  });
+
+  it('cleans up the active turn and attempts both tool disposers when either throws', async () => {
+    const { bridge, context } = await createBridge();
+    const stored = await (bridge as unknown as {
+      sessionMap: { getOrCreate: (conversationId: string) => Promise<{ sessionId: string }> };
+    }).sessionMap.getOrCreate('conversation-1');
+    const disposeCommunicate = vi.fn(() => {
+      throw new Error('communicate disposer failed');
+    });
+    const disposeNoReply = vi.fn(() => {
+      throw new Error('no_reply disposer failed');
+    });
+    const register = vi.fn((tool: { name: string }) => (
+      tool.name === 'communicate' ? disposeCommunicate : disposeNoReply
+    ));
+    const agent = {
+      id: stored.sessionId,
+      ctx: { tools: { register } },
+      inbox: { remove: vi.fn() },
+      cancel: vi.fn(),
+      followup: vi.fn(),
+      whenIdle: vi.fn(async () => undefined),
+      session: {},
+    };
+    (bridge as unknown as { sessions: Map<string, unknown> }).sessions.set('conversation-1', {
+      conversationId: 'conversation-1',
+      sessionId: stored.sessionId,
+      confirmed: true,
+      handle: { agent, dispose: vi.fn(async () => undefined) },
+    });
+    (bridge as unknown as { conversationsBySessionId: Map<string, string> })
+      .conversationsBySessionId.set(stored.sessionId, 'conversation-1');
+    (context.sessions as Mutable<Context['sessions']>).flush = vi.fn(async () => true);
+    const handle = (input: unknown) => (bridge as unknown as {
+      handleCanonMessage: (value: unknown) => Promise<void>;
+    }).handleCanonMessage(input);
+
+    await expect(handle(createMessageContext({ outboundPolicy: 'approval-required' })))
+      .resolves.toBeUndefined();
+    await expect(handle(createMessageContext({
+      id: 'message-2',
+      outboundPolicy: 'approval-required',
+    }))).resolves.toBeUndefined();
+
+    expect(register).toHaveBeenCalledTimes(4);
+    expect(disposeCommunicate).toHaveBeenCalledTimes(2);
+    expect(disposeNoReply).toHaveBeenCalledTimes(2);
+  });
+
   it('creates a session through the agent factory', async () => {
     const { bridge, context } = await createBridge();
     const cancel = vi.fn();
