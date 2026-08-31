@@ -8,10 +8,11 @@ persistence rows.
 Use the Canon app at [canonmail.com](https://canonmail.com) to approve your
 agent and message it after setup.
 
-The plugin uses DSH's public agent, attachment, approval, and session-event
+The plugin uses DSH's public agent, attachment, approval, tool, and session-event
 contracts. DSH owns the model, tools, permissions, persistence, and execution
 environment; Canon adapts messages, native image references, visible activity,
-one-shot approvals, optional user questions/plan review, and runtime signals.
+one-shot approvals, optional user questions/plan review, runtime signals, and
+one policy-filtered native `communicate` tool.
 
 ## Requirements
 
@@ -104,6 +105,10 @@ Two plugin fields are intentionally composition-owned rather than inferred:
 - DSH `plan-review` intent rendered as Canon's native plan-review card, with
   approve, keep-planning, and revision feedback mapped back to DSH.
 - Optional Canon Plan turn mode backed by DSH's own logged `planMode` service.
+- One DSH-native `communicate` tool for existing messages, new or latest direct
+  conversations, groups, forwarding, contact sharing, and group membership.
+  It is mounted only during an active Canon turn when the agent's outbound
+  policy is `open` or `approval-required`; Canon remains the policy authority.
 - Interrupt, stop-and-drop, and new-session signals.
 
 Canon interrupt aborts the active DSH turn with `keepInbox: true`. Stop-and-drop

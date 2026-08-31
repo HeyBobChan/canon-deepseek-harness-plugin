@@ -16,6 +16,7 @@ import {
 } from '@deepseek-ai/dsh-user-questions';
 import type { PlanModeController } from '@deepseek-ai/dsh-plan-mode';
 import type {} from '@deepseek-ai/dsh-session-persistence';
+import type { ToolDefinition } from '@deepseek-ai/dsh-tools';
 import { CanonAgent } from '@canonmsg/agent-sdk';
 import type { MessageHandlerContext } from '@canonmsg/agent-sdk';
 import { CANON_DIR, type ResolvedAgent } from '@canonmsg/core';
@@ -37,6 +38,10 @@ import {
   toDshPlanAnswer,
   toDshQuestionAnswer,
 } from './user-questions.js';
+import {
+  communicationIsEnabled,
+  createDeepSeekHarnessCommunicationTool,
+} from './communication-tool.js';
 
 interface ActiveCanonTurn {
   conversationId: string;
@@ -46,6 +51,7 @@ interface ActiveCanonTurn {
   dshTurn?: number;
   readonly toolCallIds: Set<string>;
   readonly toolNamesByCallId: Map<string, string>;
+  disposeCommunicationTool?: () => void;
 }
 
 interface OwnedDshSession {
@@ -88,6 +94,7 @@ export class DeepSeekHarnessBridge {
   private readonly pendingActivityPublishes = new Set<Promise<void>>();
   private readonly pendingApprovalCancellers = new Set<AbortController>();
   private readonly sessionMap: CanonSessionMap;
+  private readonly communicationTool: ToolDefinition;
   private disposed = false;
   private disposePromise: Promise<void> | null = null;
 
@@ -100,6 +107,12 @@ export class DeepSeekHarnessBridge {
       'session-maps',
       `${namespaceHash}.json`,
     ), namespace);
+    this.communicationTool = createDeepSeekHarnessCommunicationTool((sessionId) => {
+      const conversationId = this.conversationsBySessionId.get(sessionId);
+      return conversationId === undefined
+        ? undefined
+        : this.activeTurns.get(conversationId)?.canonContext;
+    });
 
     deps.context.on('session/event', (session: Session, event: SessionEvent) => {
       this.handleSessionEvent(session, event);
@@ -144,7 +157,7 @@ export class DeepSeekHarnessBridge {
     const active = conversationId === undefined
       ? undefined
       : this.activeTurns.get(conversationId);
-    if (!active) {
+    if (sessionId === undefined || !active) {
       throw new UserQuestionError(
         'no active Canon turn owns this DSH user question',
         'NO_CANON_ROUTE',
@@ -186,7 +199,9 @@ export class DeepSeekHarnessBridge {
         runtime: 'deepseek-harness',
         method: 'ask_user_question',
         requestId: inputId,
+        sessionKey: String(sessionId),
         turnId: active.canonContext.turn?.id,
+        handles: {},
       },
       turnId: active.canonContext.turn?.id,
       timeoutMs: 10 * 60_000,
@@ -328,6 +343,12 @@ export class DeepSeekHarnessBridge {
       const turnSession = owned;
       const activeTurn = active;
 
+      if (communicationIsEnabled(context)) {
+        active.disposeCommunicationTool = turnSession.handle.agent.ctx.tools.register(
+          this.communicationTool,
+        );
+      }
+
       if (this.deps.config.planMode) {
         const planMode = this.deps.getPlanMode?.();
         if (!planMode) {
@@ -376,6 +397,7 @@ export class DeepSeekHarnessBridge {
       }
     } finally {
       if (abortListenerAdded) context.abortSignal.removeEventListener('abort', abortHandler);
+      active?.disposeCommunicationTool?.();
       if (active && this.activeTurns.get(context.conversationId) === active) {
         this.activeTurns.delete(context.conversationId);
       }

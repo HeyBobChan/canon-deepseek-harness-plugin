@@ -11,6 +11,7 @@ describe('Canon DSH Cordis plugin', () => {
       'sessions',
       'approval',
       'sessionPersistence',
+      'tools',
     ]);
     expect(Config).toBeTypeOf('function');
     expect(apply).toBeTypeOf('function');
