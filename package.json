@@ -89,7 +89,7 @@
     "type": "git",
     "url": "git+https://github.com/HeyBobChan/canon-deepseek-harness-plugin.git"
   },
-  "homepage": "https://github.com/HeyBobChan/canon-deepseek-harness-plugin#readme",
+  "homepage": "https://canonmail.com/agents/integrations#deepseek-harness",
   "bugs": {
     "url": "https://github.com/HeyBobChan/canon-deepseek-harness-plugin/issues"
   },
