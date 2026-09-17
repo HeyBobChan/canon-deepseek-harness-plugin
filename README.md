@@ -180,3 +180,9 @@ deep-merge any DSH-owned row.
 DeepSeek Harness is in developer preview. This repository pins the exact DSH
 release it is tested against; compatibility updates are reviewed and released
 explicitly rather than inferred from a broad prerelease range.
+
+### Shared endpoint upgrade
+
+Version 0.5 uses Canon SDK 11 and the shared endpoint journal. Run Node 22.22.3 or newer. On a managed host, set `CANON_ENDPOINT_STATE_DIR` to a private persistent volume (the fleet image uses `/data/canon-endpoint`); on a local machine, the default is the endpoint directory under `CANON_HOME` or `~/.canon`. Retain this state together with the existing DSH session mapping and native sessions.
+
+Stop the existing writer before upgrading. Use `canon-endpoint-migrate` from Core 13 with the same credentials, environment and state directory to inventory and reconcile pre-cutover inputs against the DSH journals. Import the reviewed manifest before starting the plugin. A claimed turn with an unknown provider outcome remains uncertain; an unread/read marker is not an execution receipt. The plugin does not change model, provider, workspace or DSH session identity.
