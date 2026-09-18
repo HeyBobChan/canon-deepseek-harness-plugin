@@ -28,9 +28,9 @@ describe('Canon DSH package metadata', () => {
     expect(manifest.homepage).toBe('https://github.com/HeyBobChan/canon-deepseek-harness-plugin#readme');
     expect(manifest.files).toEqual(['dist', 'cordis.patch.yml', 'README.md', 'LICENSE']);
     expect(manifest.dependencies).toMatchObject({
-      '@canonmsg/agent-sdk': '^10.2.0',
-      '@canonmsg/agent-tools': '^0.8.0',
-      '@canonmsg/core': '^12.2.0',
+      '@canonmsg/agent-sdk': '^11.0.0',
+      '@canonmsg/agent-tools': '^0.11.0',
+      '@canonmsg/core': '^13.0.0',
     });
     expect(manifest.peerDependencies).toMatchObject({
       '@deepseek-ai/dsh-agent': '0.1.1-rc.2',

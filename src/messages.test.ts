@@ -59,7 +59,7 @@ function turnContext(
     conversation: {
       id: 'conversation-1',
       type: conversationType,
-      memberCount: input.memberCount ?? 2,
+      memberCount: input.memberCount ?? (conversationType === 'group' ? 4 : 2),
     },
     provenance: {
       sender: {

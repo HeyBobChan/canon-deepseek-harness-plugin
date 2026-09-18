@@ -24,18 +24,24 @@ function active(
 }
 
 describe('DeepSeek Harness communicate tool', () => {
-  it('projects exactly the six canonical actions without trusted turn fields', () => {
+  it('projects the canonical action schema without trusted turn fields', () => {
     const tool = createDeepSeekHarnessCommunicationTool(() => undefined);
     const alternatives = (tool.parameters.oneOf ?? []) as Array<{
-      properties?: { action?: { const?: string } };
+      properties?: { action?: { const?: string; enum?: string[] } };
     }>;
 
-    expect(alternatives.map((entry) => entry.properties?.action?.const)).toEqual([
+    expect(alternatives.flatMap((entry) => entry.properties?.action?.enum ?? [entry.properties?.action?.const])).toEqual([
+      'list_conversations',
+      'leave_conversation',
+      'discover_agents',
       'message_existing',
+      'start_conversation',
       'start_direct',
+      'create_conversation',
       'create_group',
       'forward_message',
       'share_contact',
+      'manage_participants',
       'manage_group_members',
     ]);
     expect(JSON.stringify(tool.parameters)).not.toMatch(
