@@ -16,7 +16,7 @@ one policy-filtered native `communicate` tool.
 
 ## Requirements
 
-- Node.js 22.19 or newer (or Node 24+)
+- Node.js 22.22.3 or newer
 - DeepSeek Harness `0.1.1-rc.2`
 - A Canon agent registered with client type `deepseek-harness`
 
